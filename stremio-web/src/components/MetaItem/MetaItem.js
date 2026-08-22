@@ -15,7 +15,7 @@ const { default: getMetaDetailsHref } = require('stremio/common/getMetaDetailsHr
 const { ICON_FOR_TYPE } = require('stremio/common/CONSTANTS');
 const styles = require('./styles');
 
-const MetaItem = React.memo(({ className, type, name, poster, posterShape, posterChangeCursor, progress, newVideos, options, deepLinks, href: customHref, dataset, optionOnSelect, onDismissClick, onPlayClick, watched, ...props }) => {
+const MetaItem = React.memo(({ className, type, name, poster, posterShape, posterChangeCursor, progress, newVideos, subtitleLabel, subtitleTitle, options, deepLinks, href: customHref, dataset, optionOnSelect, onDismissClick, onPlayClick, watched, ...props }) => {
     const { t } = useTranslation();
     const { navigateWithOrigin } = useNavigateWithOrigin();
     const [menuOpen, onMenuOpen, onMenuClose] = useBinaryState(false);
@@ -104,6 +104,25 @@ const MetaItem = React.memo(({ className, type, name, poster, posterShape, poste
                         null
                 }
                 {
+                    (typeof subtitleLabel === 'string' && subtitleLabel.length > 0) || (typeof subtitleTitle === 'string' && subtitleTitle.length > 0) ?
+                        <div className={styles['subtitle-label-layer']}>
+                            {
+                                typeof subtitleLabel === 'string' && subtitleLabel.length > 0 ?
+                                    <div className={styles['season-label']}>{subtitleLabel}</div>
+                                    :
+                                    null
+                            }
+                            {
+                                typeof subtitleTitle === 'string' && subtitleTitle.length > 0 ?
+                                    <div className={styles['title-label']} title={subtitleTitle}>{subtitleTitle}</div>
+                                    :
+                                    null
+                            }
+                        </div>
+                        :
+                        null
+                }
+                {
                     progress > 0 ?
                         <div className={styles['progress-bar-layer']}>
                             <div className={styles['progress-bar']} style={{ width: `${progress}%` }} />
@@ -168,6 +187,8 @@ MetaItem.propTypes = {
     posterChangeCursor: PropTypes.bool,
     progress: PropTypes.number,
     newVideos: PropTypes.number,
+    subtitleLabel: PropTypes.string,
+    subtitleTitle: PropTypes.string,
     options: PropTypes.array,
     href: PropTypes.string,
     deepLinks: PropTypes.shape({

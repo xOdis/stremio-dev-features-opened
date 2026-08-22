@@ -32,6 +32,7 @@ const { default: SideDrawerButton } = require('./SideDrawerButton');
 const { default: SideDrawer } = require('./SideDrawer');
 const usePlayer = require('./usePlayer');
 const useSkipSegments = require('./useSkipSegments');
+const { buildStreamsUrl, pickBestStream } = require('./bingeFallback');
 const { default: usePlayOnDevice } = require('./usePlayOnDevice');
 const { default: useKeyboardSeek } = require('./useKeyboardSeek');
 const useStatistics = require('./useStatistics');
@@ -204,38 +205,80 @@ const Player = () => {
 
     const HOLD_DELAY = 400;
 
-    const handleNextVideoNavigation = React.useCallback((deepLinks, bingeWatching, ended) => {
-        if (ended) {
-            if (bingeWatching) {
-                if (deepLinks.player) {
-                    navigate(toPath(deepLinks.player), { replace: true });
-                } else if (deepLinks.metaDetailsStreams) {
-                    navigate(toPath(deepLinks.metaDetailsStreams), { replace: true });
-                }
-            } else {
-                navigate(-1);
-            }
+    // Continues to the next episode. Fast path: the core engine already
+    // produced a player link (provider carried over via bingeGroup match).
+    // Fallback: when that link is missing, query the same addon for the next
+    // episode and auto-play the stream most similar to the current one —
+    // instead of dropping the user on the streams list.
+    const navigateToNextEpisode = React.useCallback(async (bingeWatching, ended) => {
+        const nextVideoItem = player.nextVideo;
+        const deepLinks = nextVideoItem !== null && nextVideoItem !== undefined ? nextVideoItem.deepLinks : null;
 
-        } else {
-            if (deepLinks.player) {
-                navigate(toPath(deepLinks.player), { replace: true });
-            } else if (deepLinks.metaDetailsStreams) {
-                navigate(toPath(deepLinks.metaDetailsStreams), { replace: true });
+        if (ended && !bingeWatching) {
+            navigate(-1);
+            return;
+        }
+
+        if (deepLinks && typeof deepLinks.player === 'string') {
+            navigate(toPath(deepLinks.player), { replace: true });
+            return;
+        }
+
+        const selected = player.selected;
+        const streamRequest = selected?.streamRequest ?? null;
+        if (nextVideoItem && streamRequest) {
+            try {
+                const streamsUrl = buildStreamsUrl(streamRequest, nextVideoItem.id);
+                if (streamsUrl !== null) {
+                    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+                    const timeout = controller !== null ? setTimeout(() => controller.abort(), 8000) : null;
+                    try {
+                        const response = await fetch(streamsUrl, controller !== null ? { signal: controller.signal } : undefined);
+                        if (!response.ok) throw new Error('HTTP ' + response.status);
+                        const data = await response.json();
+                        const chosen = pickBestStream(Array.isArray(data?.streams) ? data.streams : [], selected.stream);
+                        if (chosen !== null) {
+                            const encoded = await core.transport.encodeStream({
+                                name: chosen.name,
+                                description: chosen.description,
+                                infoHash: chosen.infoHash,
+                                fileIdx: chosen.fileIdx,
+                                url: chosen.url,
+                                externalUrl: chosen.externalUrl,
+                                ytId: chosen.ytId
+                            });
+                            const videoId = streamRequest.path.id;
+                            const metaId = videoId.split(':')[0];
+                            navigate(
+                                `/player/${encodeURIComponent(encoded)}/${encodeURIComponent(streamRequest.base)}/${encodeURIComponent(selected.metaRequest.base)}/${encodeURIComponent(streamRequest.path.type)}/${encodeURIComponent(metaId)}/${encodeURIComponent(videoId)}`,
+                                { replace: true }
+                            );
+                            return;
+                        }
+                    } finally {
+                        if (timeout !== null) clearTimeout(timeout);
+                    }
+                }
+            } catch (_e) {
+                // network/encoding failure: fall through to the links list
             }
         }
-    }, []);
+
+        if (deepLinks && typeof deepLinks.metaDetailsStreams === 'string') {
+            navigate(toPath(deepLinks.metaDetailsStreams), { replace: true });
+        }
+    }, [player.nextVideo, player.selected, core, navigate]);
 
     const onEnded = React.useCallback(() => {
         ended();
         if (player.nextVideo !== null) {
             nextVideo();
 
-            const deepLinks = player.nextVideo.deepLinks;
-            handleNextVideoNavigation(deepLinks, profile.settings.bingeWatching, true);
+            navigateToNextEpisode(profile.settings.bingeWatching, true);
         } else {
             navigate(-1);
         }
-    }, [player.nextVideo, profile.settings.bingeWatching, handleNextVideoNavigation]);
+    }, [player.nextVideo, profile.settings.bingeWatching, navigateToNextEpisode, ended, nextVideo, navigate]);
 
     const onError = React.useCallback((error) => {
         console.error('Player', error);
@@ -487,10 +530,9 @@ const Player = () => {
             cancelKeyboardSeek();
             nextVideo();
 
-            const deepLinks = player.nextVideo.deepLinks;
-            handleNextVideoNavigation(deepLinks, profile.settings.bingeWatching, false);
+            navigateToNextEpisode(profile.settings.bingeWatching, false);
         }
-    }, [player.nextVideo, handleNextVideoNavigation, profile.settings, cancelKeyboardSeek]);
+    }, [player.nextVideo, navigateToNextEpisode, profile.settings, cancelKeyboardSeek]);
 
     const onVideoClick = React.useCallback(() => {
         if (video.state.paused !== null && !longPress.current) {
@@ -914,10 +956,9 @@ const Player = () => {
         closeMenus();
         if (player.nextVideo !== null) {
             nextVideo();
-            const deepLinks = player.nextVideo.deepLinks;
-            handleNextVideoNavigation(deepLinks, false, false);
+            navigateToNextEpisode(false, false);
         }
-    }, [player.nextVideo, handleNextVideoNavigation]);
+    }, [player.nextVideo, navigateToNextEpisode]);
 
     onShortcut('exit', () => {
         closeMenus();
@@ -1169,6 +1210,7 @@ const Player = () => {
                 time={keyboardSeekTime ?? video.state.time}
                 duration={video.state.duration}
                 buffered={video.state.buffered}
+                skipSegments={skipSegments}
                 volume={video.state.volume}
                 muted={video.state.muted}
                 playbackSpeed={video.state.playbackSpeed}
