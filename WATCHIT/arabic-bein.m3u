@@ -1,0 +1,21 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="beINSports1.ar" tvg-name="beIN Sports 1 HD" group-title="BeIN Arabic",beIN Sports 1 HD (AR)
+https://tvsen6.aynaott.com/beinsports/index.m3u8
+#EXTINF:-1 tvg-id="beINSports2.ar" tvg-name="beIN Sports 2 HD" group-title="BeIN Arabic",beIN Sports 2 HD (AR)
+https://andro.226503.xyz/checklist/androstreamlivebs2.m3u8
+#EXTINF:-1 tvg-id="beINSports3.ar" tvg-name="beIN Sports 3 HD" group-title="BeIN Arabic",beIN Sports 3 HD (AR)
+https://andro.226503.xyz/checklist/androstreamlivebs3.m3u8
+#EXTINF:-1 tvg-id="beINSports4.ar" tvg-name="beIN Sports 4 HD" group-title="BeIN Arabic",beIN Sports 4 HD (AR)
+https://andro.226503.xyz/checklist/androstreamlivebs4.m3u8
+#EXTINF:-1 tvg-id="beINSportsXtra.ar" tvg-name="beIN Sports Xtra" group-title="BeIN Arabic",beIN Sports Xtra (AR)
+https://chostv.mobie.in/choos/sports/beinxtra.m3u8
+#EXTINF:-1 tvg-id="beINSportsXtra.amagi" tvg-name="beIN SPORTS XTRA" group-title="BeIN Arabic",beIN SPORTS XTRA (1080p)
+https://bein-xtra-bein.amagi.tv/playlist.m3u8
+#EXTINF:-1 tvg-id="beINSportsXtraESP.amagi" tvg-name="beIN SPORTS XTRA ESP" group-title="BeIN Arabic",beIN SPORTS XTRA en Espanol (1080p)
+https://bein-esp-xumo.amagi.tv/playlistR720P.m3u8
+#EXTINF:-1 tvg-id="beINSportsHaber.tr" tvg-name="beIN Sports Haber" group-title="BeIN Arabic",beIN Sports Haber (TR)
+https://1nyaler.streamhostingcdn.top/stream/23/index.m3u8
+#EXTINF:-1 tvg-id="beINSportsUSA.us" tvg-name="beIN Sports USA" group-title="BeIN Arabic",beIN Sports USA (1080p)
+https://messi.damitv.st/papi/ts/beinsports-usa/playlist.m3u8
+#EXTINF:-1 tvg-id="k100streymi.bein" tvg-name="beIN Sports (IS)" group-title="BeIN Arabic",beIN Sports (Iceland)
+https://k100streymi.mbl.is/beint/k100/index.m3u8

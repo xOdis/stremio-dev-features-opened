@@ -1,6 +1,7 @@
 // Copyright (C) 2017-2023 Smart code 203358507
 
 const React = require('react');
+const ReactDOM = require('react-dom');
 const { useParams, useNavigate } = require('react-router');
 const { useSearchParams } = require('react-router-dom');
 const classnames = require('classnames');
@@ -19,11 +20,38 @@ const VolumeChangeIndicator = require('./VolumeChangeIndicator');
 const Error = require('./Error');
 const ControlBar = require('./ControlBar');
 const NextVideoPopup = require('./NextVideoPopup');
+const RelatedOverlay = require('./RelatedOverlay');
 const SkipIntroButton = require('./SkipIntroButton');
 const StatisticsMenu = require('./StatisticsMenu');
 const OptionsMenu = require('./OptionsMenu');
 const NextEpisodeButton = require('./NextEpisodeButton');
 const { readAutoNextEpisode, writeAutoNextEpisode } = require('./autoNextEpisodeSetting');
+const { readPlayerSettings, writePlayerSettings, defaultSubtitleFont, subtitleFontStack } = require('./playerSettingsStorage');
+
+// Resolves the on-disk fonts folder (served by the local server) so mpv's
+// libass can load bundled/drop-in fonts that are not installed in Windows.
+let fontsDirPromise = null;
+const fetchFontsDir = () => {
+    if (fontsDirPromise === null) {
+        fontsDirPromise = fetch('/fonts-dir')
+            .then((response) => response.ok ? response.json() : null)
+            .then((data) => typeof data?.path === 'string' && data.path.length > 0 ? data.path : null)
+            .catch(() => null);
+    }
+    return fontsDirPromise;
+};
+const sendSubtitleFontToShell = (shell, font) => {
+    const primaryFont = String(font ?? '').replace(/['"\\]/g, '').trim();
+    if (primaryFont.length === 0) {
+        return;
+    }
+    fetchFontsDir().then((fontsDir) => {
+        if (fontsDir !== null) {
+            shell.send('mpv-set-prop', 'sub-fonts-dir', fontsDir);
+        }
+        shell.send('mpv-set-prop', 'sub-font', primaryFont);
+    });
+};
 const { default: CastDevicesMenu } = require('./CastDevicesMenu');
 const SubtitlesMenu = require('./SubtitlesMenu');
 const { default: AudioMenu } = require('./AudioMenu');
@@ -121,8 +149,8 @@ const Player = () => {
     const [sideDrawerOpen, , closeSideDrawer, toggleSideDrawer] = useBinaryState(false);
 
     const menusOpen = React.useMemo(() => {
-        return optionsMenuOpen || subtitlesMenuOpen || audioMenuOpen || speedMenuOpen || statisticsMenuOpen || castDevicesMenuOpen || sideDrawerOpen || nextVideoPopupOpen;
-    }, [optionsMenuOpen, subtitlesMenuOpen, audioMenuOpen, speedMenuOpen, statisticsMenuOpen, castDevicesMenuOpen, sideDrawerOpen, nextVideoPopupOpen]);
+        return optionsMenuOpen || subtitlesMenuOpen || audioMenuOpen || speedMenuOpen || statisticsMenuOpen || castDevicesMenuOpen || sideDrawerOpen || nextVideoPopupOpen || relatedOverlayOpen;
+    }, [optionsMenuOpen, subtitlesMenuOpen, audioMenuOpen, speedMenuOpen, statisticsMenuOpen, castDevicesMenuOpen, sideDrawerOpen, nextVideoPopupOpen, relatedOverlayOpen]);
 
     const closeMenus = React.useCallback(() => {
         closeOptionsMenu();
@@ -275,10 +303,12 @@ const Player = () => {
             nextVideo();
 
             navigateToNextEpisode(profile.settings.bingeWatching, true);
+        } else if (isSeriesFinale) {
+            setRelatedOverlayOpen(true);
         } else {
             navigate(-1);
         }
-    }, [player.nextVideo, profile.settings.bingeWatching, navigateToNextEpisode, ended, nextVideo, navigate]);
+    }, [player.nextVideo, isSeriesFinale, navigateToNextEpisode, ended, nextVideo, navigate]);
 
     const onError = React.useCallback((error) => {
         console.error('Player', error);
@@ -401,52 +431,116 @@ const Player = () => {
     const [nextEpisodeDismissed, setNextEpisodeDismissed] = React.useState(false);
     const autoNextFiredRef = React.useRef(false);
     const videoKey = player?.selected?.streamRequest?.path?.id ?? null;
+    // Reset per-episode UI state only when a NEW video actually starts.
+    // At the very end of playback the core may unload the stream (videoKey
+    // becomes null) — that must NOT close the related overlay.
+    const previousVideoKeyRef = React.useRef(videoKey);
     React.useEffect(() => {
+        if (videoKey === null || videoKey === previousVideoKeyRef.current) {
+            return;
+        }
+        previousVideoKeyRef.current = videoKey;
         setNextEpisodeDismissed(false);
         autoNextFiredRef.current = false;
+        relatedDismissedRef.current = false;
+        playbackStartedRef.current = false;
     }, [videoKey]);
+
+    // Series finale: the selected video is the last entry of the series'
+    // video list (fallback: no next video from the core). The related
+    // overlay is offered (never forced) through a cancellable countdown
+    // and a "Related work" pill.
+    const isSeriesFinale = React.useMemo(() => {
+        const metaContent = player.metaItem !== null && player.metaItem.type === 'Ready' ? player.metaItem.content : null;
+        if (metaContent === null || metaContent.type !== 'series' || typeof metaContent.id !== 'string') {
+            return false;
+        }
+        const selectedVideoId = player.selected?.streamRequest?.path?.id ?? null;
+        if (typeof selectedVideoId === 'string' && Array.isArray(metaContent.videos) && metaContent.videos.length > 0) {
+            const lastVideo = metaContent.videos[metaContent.videos.length - 1];
+            return typeof lastVideo?.id === 'string' ? selectedVideoId === lastVideo.id : player.nextVideo === null;
+        }
+        return player.nextVideo === null;
+    }, [player.nextVideo, player.metaItem, player.selected]);
+    const [relatedOverlayOpen, setRelatedOverlayOpen] = React.useState(false);
+    const relatedDismissedRef = React.useRef(false);
+    const onRelatedCancel = React.useCallback(() => {
+        relatedDismissedRef.current = true;
+        setRelatedOverlayOpen(false);
+    }, []);
+    const onRelatedShowNow = React.useCallback(() => {
+        setRelatedOverlayOpen(true);
+    }, []);
 
     // Countdown runs through the first 10s of the outro. Cancelling stops
     // the countdown and disables the automatic jump for this episode — but
     // the Next Episode button itself stays visible and clickable.
     const nextEpisodeCountdown = React.useMemo(() => {
         if (!skipUiAllowed || !autoNextEnabled || creditsSegment === null || nextEpisodeDismissed || playbackTime === null) return null;
+        if (isSeriesFinale) return null;
         const elapsed = playbackTime - creditsSegment.startMs;
         if (elapsed < 0 || elapsed >= NEXT_EPISODE_COUNTDOWN_MS) return null;
         const secondsLeft = Math.ceil((NEXT_EPISODE_COUNTDOWN_MS - elapsed) / 1000);
         return isFinite(secondsLeft) ? Math.max(1, secondsLeft) : null;
-    }, [skipUiAllowed, autoNextEnabled, creditsSegment, nextEpisodeDismissed, playbackTime]);
+    }, [skipUiAllowed, autoNextEnabled, creditsSegment, nextEpisodeDismissed, playbackTime, isSeriesFinale]);
 
     // Auto-next: when enabled and not cancelled, jump to the end of media
-    // once the 10s countdown finishes. Fires once per video.
+    // once the 10s countdown finishes. Fires once per video. Skipped on a
+    // series finale — outro watchers are not dragged to the related offer.
     React.useEffect(() => {
         if (!skipUiAllowed || !autoNextEnabled || creditsSegment === null || nextEpisodeDismissed || autoNextFiredRef.current) return;
+        if (isSeriesFinale) return;
         if (playbackTime === null || playbackDuration === null) return;
         if (playbackTime >= creditsSegment.startMs + NEXT_EPISODE_COUNTDOWN_MS) {
             autoNextFiredRef.current = true;
             commitSeek(playbackDuration);
         }
-    }, [skipUiAllowed, autoNextEnabled, creditsSegment, nextEpisodeDismissed, playbackTime, playbackDuration]);
+    }, [skipUiAllowed, autoNextEnabled, creditsSegment, nextEpisodeDismissed, playbackTime, playbackDuration, isSeriesFinale]);
 
     // Manual pill shown during the outro whenever the countdown is not
     // active — including after cancelling auto-next for this episode, so
-    // the button remains visible and functional.
+    // the button remains visible and functional. On a finale the Related
+    // work pill takes over instead.
     const showManualNextEpisode = React.useMemo(() => {
         if (!skipUiAllowed || creditsSegment === null || playbackTime === null || playbackDuration === null) return false;
+        if (isSeriesFinale) return false;
         return nextEpisodeCountdown === null && playbackTime >= creditsSegment.startMs;
-    }, [skipUiAllowed, creditsSegment, playbackTime, playbackDuration, nextEpisodeCountdown]);
+    }, [skipUiAllowed, creditsSegment, playbackTime, playbackDuration, nextEpisodeCountdown, isSeriesFinale]);
 
-    const nextEpisodeElement = (nextEpisodeCountdown !== null || showManualNextEpisode) && playbackDuration !== null ?
+    // On a finale the Related work pill appears at the same moment the
+    // Next Episode pill normally would: when the credits segment starts
+    // (or, without segment data, in the last 3 minutes).
+    const showRelatedPill = React.useMemo(() => {
+        if (!isSeriesFinale || relatedOverlayOpen || playbackDuration === null || playbackTime === null) {
+            return false;
+        }
+        if (creditsSegment !== null && playbackTime >= creditsSegment.startMs) {
+            return true;
+        }
+        return playbackDuration - playbackTime <= 180;
+    }, [isSeriesFinale, relatedOverlayOpen, playbackTime, playbackDuration, creditsSegment]);
+
+    const nextEpisodeElement = showRelatedPill ?
         (
             <NextEpisodeButton
-                secondsLeft={nextEpisodeCountdown}
+                secondsLeft={null}
                 totalSeconds={NEXT_EPISODE_COUNTDOWN_MS / 1000}
-                onClick={() => commitSeek(playbackDuration)}
-                onCancel={() => setNextEpisodeDismissed(true)}
+                label={t('PLAYER_RELATED_WORK', 'Related work')}
+                onClick={onRelatedShowNow}
             />
         )
         :
-        null;
+        (nextEpisodeCountdown !== null || showManualNextEpisode) && playbackDuration !== null ?
+            (
+                <NextEpisodeButton
+                    secondsLeft={nextEpisodeCountdown}
+                    totalSeconds={NEXT_EPISODE_COUNTDOWN_MS / 1000}
+                    onClick={() => commitSeek(playbackDuration)}
+                    onCancel={() => setNextEpisodeDismissed(true)}
+                />
+            )
+            :
+            null;
 
     const skipItems = React.useMemo(() => {
         return activeSkipSegments
@@ -510,6 +604,156 @@ const Player = () => {
         const nextScale = VIDEO_SCALES[(currentIndex + 1) % VIDEO_SCALES.length];
         video.setVideoScale(nextScale);
     }, [video.state.videoScale]);
+
+    // Persisted player settings: restored once per video as soon as each
+    // engine prop reports a real value; saved (debounced) on every change.
+    const restoredSettingsRef = React.useRef({});
+    // Second restore pass at playback start: mpv only accepts properties
+    // reliably once the file is loaded — earlier commands can be dropped
+    // (volume) or overwritten later (subtitle styling on
+    // implementationChanged), so everything saved is re-applied here.
+    const playbackStartedForKeyRef = React.useRef(null);
+    const playbackStartedRef = React.useRef(false);
+    React.useEffect(() => {
+        restoredSettingsRef.current = {};
+    }, [videoKey]);
+    React.useEffect(() => {
+        const restored = restoredSettingsRef.current;
+        const tryRestore = (key, currentValue, apply) => {
+            if (restored[key] || currentValue === null || currentValue === undefined) {
+                return;
+            }
+            restored[key] = true;
+            const saved = readPlayerSettings();
+            if (saved[key] !== undefined) {
+                apply(saved[key]);
+            }
+        };
+        tryRestore('volume', video.state.volume, (value) => video.setVolume(value));
+        tryRestore('muted', video.state.muted, (value) => video.setMuted(value));
+        tryRestore('playbackSpeed', video.state.playbackSpeed, (value) => video.setPlaybackSpeed(value));
+        tryRestore('videoScale', video.state.videoScale, (value) => video.setVideoScale(value));
+        tryRestore('subtitlesSize', video.state.subtitlesSize, (value) => video.setSubtitlesSize(value));
+        tryRestore('subtitlesOffset', video.state.subtitlesOffset, (value) => video.setSubtitlesOffset(value));
+        tryRestore('subtitlesTextColor', video.state.subtitlesTextColor, (value) => video.setSubtitlesTextColor(value));
+        tryRestore('subtitlesBackgroundColor', video.state.subtitlesBackgroundColor, (value) => video.setSubtitlesBackgroundColor(value));
+        tryRestore('subtitlesOutlineColor', video.state.subtitlesOutlineColor, (value) => video.setSubtitlesOutlineColor(value));
+    }, [video.state]);
+
+    React.useEffect(() => {
+        if (typeof video.state.time !== 'number' || !isFinite(video.state.time)) {
+            return;
+        }
+        if (playbackStartedForKeyRef.current === videoKey) {
+            return;
+        }
+        playbackStartedForKeyRef.current = videoKey;
+
+        const saved = readPlayerSettings();
+        if (saved.volume !== undefined) video.setVolume(saved.volume);
+        if (saved.muted !== undefined) video.setMuted(saved.muted);
+        if (saved.playbackSpeed !== undefined) video.setPlaybackSpeed(saved.playbackSpeed);
+        if (saved.videoScale !== undefined) video.setVideoScale(saved.videoScale);
+        if (saved.subtitlesSize !== undefined) video.setSubtitlesSize(saved.subtitlesSize);
+        if (saved.subtitlesOffset !== undefined) video.setSubtitlesOffset(saved.subtitlesOffset);
+        if (saved.subtitlesTextColor !== undefined) video.setSubtitlesTextColor(saved.subtitlesTextColor);
+        if (saved.subtitlesBackgroundColor !== undefined) video.setSubtitlesBackgroundColor(saved.subtitlesBackgroundColor);
+        if (saved.subtitlesOutlineColor !== undefined) video.setSubtitlesOutlineColor(saved.subtitlesOutlineColor);
+        if (platform.shell.active) {
+            sendSubtitleFontToShell(platform.shell, subtitlesFont);
+        }
+    }, [video.state.time, videoKey, subtitlesFont, platform.shell.active]);
+
+    React.useEffect(() => {
+        if (!playbackStartedRef.current && typeof video.state.time === 'number' && isFinite(video.state.time)) {
+            playbackStartedRef.current = true;
+        }
+    }, [video.state.time]);
+
+    React.useEffect(() => {
+        // Never persist before playback started: engine defaults reported
+        // early (e.g. volume 50) would overwrite the saved values.
+        if (typeof video.state.time !== 'number' || !isFinite(video.state.time)) {
+        if (!playbackStartedRef.current) {
+            return;
+        }
+        const timer = setTimeout(() => {
+            const partial = {};
+            if (video.state.volume !== null) partial.volume = video.state.volume;
+            if (video.state.muted !== null) partial.muted = video.state.muted;
+            if (video.state.playbackSpeed !== null) partial.playbackSpeed = video.state.playbackSpeed;
+            if (video.state.videoScale !== null && video.state.videoScale !== undefined) partial.videoScale = video.state.videoScale;
+            if (video.state.subtitlesSize !== null) partial.subtitlesSize = video.state.subtitlesSize;
+            if (video.state.subtitlesOffset !== null) partial.subtitlesOffset = video.state.subtitlesOffset;
+            if (video.state.subtitlesTextColor !== null) partial.subtitlesTextColor = video.state.subtitlesTextColor;
+            if (video.state.subtitlesBackgroundColor !== null) partial.subtitlesBackgroundColor = video.state.subtitlesBackgroundColor;
+            if (video.state.subtitlesOutlineColor !== null) partial.subtitlesOutlineColor = video.state.subtitlesOutlineColor;
+            writePlayerSettings(partial);
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [
+        video.state.time,
+        video.state.volume,
+        video.state.muted,
+        video.state.playbackSpeed,
+        video.state.videoScale,
+        video.state.subtitlesSize,
+        video.state.subtitlesOffset,
+        video.state.subtitlesTextColor,
+        video.state.subtitlesBackgroundColor,
+        video.state.subtitlesOutlineColor
+    ]);
+
+    // Subtitle font: applied to native cues (::cue rule injected into the
+    // video container) and to DOM-rendered cue layers (which inherit
+    // font-family — their inline styles never touch it).
+    const [subtitlesFont, setSubtitlesFont] = React.useState(() => {
+        const saved = readPlayerSettings();
+        return saved.subtitlesFontFamily ?? defaultSubtitleFont(profile.settings?.interfaceLanguage);
+    });
+    const onSubtitlesFontChanged = React.useCallback((font) => {
+        setSubtitlesFont(font);
+        writePlayerSettings({ subtitlesFontFamily: font });
+    }, []);
+    React.useEffect(() => {
+        // Desktop shell: video (and subtitles) render natively via mpv, so
+        // the font must go through the shell IPC as an mpv property. The
+        // DOM/::cue injection below only affects the browser video path.
+        if (platform.shell.active) {
+            sendSubtitleFontToShell(platform.shell, subtitlesFont);
+        }
+        const container = video.containerRef.current;
+        if (container === null) {
+            return;
+        }
+        const fontStack = subtitleFontStack(subtitlesFont);
+        let styleElement = container.querySelector('style[data-subtitle-font]');
+        if (styleElement === null) {
+            styleElement = document.createElement('style');
+            styleElement.setAttribute('data-subtitle-font', '');
+            container.appendChild(styleElement);
+        }
+        styleElement.textContent = `video::cue { font-family: ${fontStack} !important; }`;
+        const applyFontFamily = (node) => {
+            node.style.fontFamily = fontStack;
+        };
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== 'VIDEO' && !(node instanceof HTMLStyleElement)) {
+                        applyFontFamily(node);
+                    }
+                });
+            });
+        });
+        observer.observe(container, { childList: true });
+        Array.from(container.children).forEach((child) => {
+            if (child.tagName !== 'VIDEO' && child.tagName !== 'STYLE') {
+                applyFontFamily(child);
+            }
+        });
+        return () => observer.disconnect();
+    }, [subtitlesFont, video.state.manifest, video.containerRef, platform.shell.active]);
 
     const onAudioTrackSelected = React.useCallback((id) => {
         video.setAudioTrack(id);
@@ -1269,6 +1513,18 @@ const Player = () => {
                     :
                     null
             }
+            {
+                relatedOverlayOpen && player.metaItem !== null && player.metaItem.type === 'Ready' ?
+                    ReactDOM.createPortal(
+                        <RelatedOverlay
+                            metaItem={player.metaItem.content}
+                            onClose={onRelatedCancel}
+                        />,
+                        document.body
+                    )
+                    :
+                    null
+            }
             <Transition when={statisticsMenuOpen} name={'fade'}>
                 <StatisticsMenu
                     className={classnames(styles['layer'], styles['menu-layer'])}
@@ -1296,6 +1552,8 @@ const Player = () => {
                 <SubtitlesMenu
                     className={classnames(styles['layer'], styles['menu-layer'])}
                     {...subtitlesMenuProps}
+                    subtitlesFontFamily={subtitlesFont}
+                    onSubtitlesFontChanged={onSubtitlesFontChanged}
                 />
             </Transition>
             <Transition when={audioMenuOpen} name={'fade'}>

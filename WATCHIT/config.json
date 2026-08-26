@@ -1,0 +1,71 @@
+{
+  "port": 3000,
+  "m3uSources": [
+    {
+      "name": "Zaman-Topu Active (beIN+ESPN+Sky+DAZN)",
+      "url": "https://raw.githubusercontent.com/Zaman-Topu/Ip-tv-Collection/main/FINAL_IPTV_ACTIVE.m3u",
+      "enabled": true
+    },
+    {
+      "name": "doms9 Curated (beIN+Sky+ESPN)",
+      "url": "https://raw.githubusercontent.com/doms9/iptv/refs/heads/default/M3U8/base.m3u8",
+      "enabled": true
+    },
+    {
+      "name": "iptv-org Sports",
+      "url": "https://iptv-org.github.io/iptv/categories/sports.m3u",
+      "enabled": true
+    },
+    {
+      "name": "world_ip_tv (verified)",
+      "url": "https://romaxa55.github.io/world_ip_tv/output/index.m3u",
+      "enabled": true
+    },
+    {
+      "name": "Shovo IPTV (13k+ beIN+sports)",
+      "url": "https://shovo127.github.io/IPTV-By-Shovo/index.m3u",
+      "enabled": true
+    },
+    {
+      "name": "iptv-org Arabic (356 channels)",
+      "url": "https://iptv-org.github.io/iptv/languages/ara.m3u",
+      "enabled": true
+    },
+    {
+      "name": "iptv-org QA Al Kass Sports",
+      "url": "https://iptv-org.github.io/iptv/countries/qa.m3u",
+      "enabled": true
+    },
+    {
+      "name": "iptv-org Saudi Sports",
+      "url": "https://iptv-org.github.io/iptv/countries/sa.m3u",
+      "enabled": true
+    },
+    {
+      "name": "iptv-org UAE Sports",
+      "url": "https://iptv-org.github.io/iptv/countries/ae.m3u",
+      "enabled": true
+    },
+    {
+      "name": "Arabic beIN Sports (curated)",
+      "url": "./arabic-bein.m3u",
+      "enabled": true
+    }
+  ],
+  "scheduleApi": "https://api.thesportsdb.com/v1/json/3/eventsnextday.php",
+  "leagues": [
+    "Premier League",
+    "La Liga",
+    "Bundesliga",
+    "Serie A",
+    "Ligue 1",
+    "Champions League",
+    "Europa League",
+    "MLS"
+  ],
+  "cacheDir": "./cache",
+  "cacheTTL": {
+    "m3u": 21600,
+    "schedule": 3600
+  }
+}

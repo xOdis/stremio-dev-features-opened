@@ -1,0 +1,12 @@
+{
+  "name": "watchit-football-iptv",
+  "version": "1.0.0",
+  "description": "Stremio addon for watching live football matches via IPTV sources",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
