@@ -16,6 +16,46 @@ class StremioDev
         Environment.Exit(1);
     }
 
+    // Close any already-running Stremio shell (stock or a previous dev
+    // instance) so the --webui-url launch below always wins. Without
+    // this, a running stock Stremio just gets focused and the custom
+    // dev UI never appears (single-instance shell ignores new args).
+    static void KillExistingShell()
+    {
+        string[] names = new string[] { "stremio-shell-ng", "stremio-runtime" };
+        foreach (string name in names)
+        {
+            try
+            {
+                foreach (Process p in Process.GetProcessesByName(name))
+                {
+                    try { p.Kill(); } catch { }
+                    try { p.Dispose(); } catch { }
+                }
+            }
+            catch { }
+        }
+        // Give the processes a moment to exit and release the port.
+        for (int i = 0; i < 20; i++)
+        {
+            bool anyLeft = false;
+            try
+            {
+                foreach (string name in names)
+                {
+                    if (Process.GetProcessesByName(name).Length > 0)
+                    {
+                        anyLeft = true;
+                        break;
+                    }
+                }
+            }
+            catch { break; }
+            if (!anyLeft) break;
+            Thread.Sleep(250);
+        }
+    }
+
     static bool Listening()
     {
         try
@@ -32,6 +72,8 @@ class StremioDev
     [STAThread]
     static void Main()
     {
+        KillExistingShell();
+
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         string webDir = Path.Combine(baseDir, "stremio-web");
         string serverJs = Path.Combine(webDir, "http_server.js");
